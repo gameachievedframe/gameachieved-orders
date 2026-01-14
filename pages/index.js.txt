@@ -1,0 +1,561 @@
+import React, { useState, useEffect } from 'react';
+import { ShoppingCart, Package, CheckCircle, Clock, Mail, Phone, MapPin } from 'lucide-react';
+
+// ⚠️⚠️⚠️ CONFIGURATION EMAILJS - REMPLACE PAR TES VRAIES CLÉS ⚠️⚠️⚠️
+const EMAILJS_CONFIG = {
+  serviceId: 'service_1vv48su',              // Ex: service_abc123
+  publicKey: 'FLTMZtVOe_AJx2_1j',                // Ex: aBcDeFgHiJkLmNoPqR
+  adminEmail: 'gameachievedframe@gmail.com',         // Ton email pour recevoir les notifications
+  templates: {
+    admin: 'template_7suq3et',              // Ex: template_admin_123
+    clientConfirm: 'template_1v28k3k', // Ex: template_client_456
+    clientPaid: 'template_kzce1xp',      // Ex: template_client_789
+    clientProduction: 'template_cfewouo', // Ex: template_client_012
+    clientShipped: 'template_3ftzfjj'    // Ex: template_client_345
+  }
+};
+
+// ⚠️ REMPLACE PAR TON LIEN PAYPAL
+const PAYPAL_USERNAME = 'tornusin';  // Ex: johnsmith
+
+// ⚠️ REMPLACE PAR TON LIEN IMGUR DU LOGO
+const LOGO_URL = 'https://imgur.com/a/4RzKncF';  // Upload ton logo sur imgur.com
+
+const PRICE_PER_FRAME = 17.99;
+
+export default function GameAchievedOrderSystem() {
+  const [view, setView] = useState('form');
+  const [orders, setOrders] = useState([]);
+  const [formData, setFormData] = useState({
+    quantity: 1,
+    games: [''],
+    lastName: '',
+    firstName: '',
+    email: '',
+    phone: '',
+    address: '',
+    postalCode: '',
+    city: ''
+  });
+
+  useEffect(() => {
+    loadOrders();
+    initEmailJS();
+  }, []);
+
+  // Initialise EmailJS
+  const initEmailJS = () => {
+    if (window.emailjs) {
+      window.emailjs.init(EMAILJS_CONFIG.publicKey);
+    }
+  };
+
+  const loadOrders = async () => {
+    try {
+      const result = await window.storage.list('order:');
+      if (result && result.keys) {
+        const loadedOrders = await Promise.all(
+          result.keys.map(async (key) => {
+            const data = await window.storage.get(key);
+            return data ? JSON.parse(data.value) : null;
+          })
+        );
+        setOrders(loadedOrders.filter(Boolean).sort((a, b) => b.timestamp - a.timestamp));
+      }
+    } catch (error) {
+      console.log('Première utilisation, aucune commande');
+    }
+  };
+
+  // Fonction pour envoyer un email
+  const sendEmail = async (templateId, params, toEmail) => {
+    if (!window.emailjs) {
+      console.log('EmailJS non chargé - email non envoyé');
+      return;
+    }
+
+    try {
+      await window.emailjs.send(
+        EMAILJS_CONFIG.serviceId,
+        templateId,
+        { 
+          ...params, 
+          to_email: toEmail,
+          reply_to: toEmail
+        },
+        EMAILJS_CONFIG.publicKey
+      );
+      console.log(`✅ Email envoyé avec succès à ${toEmail}`);
+    } catch (error) {
+      console.error('❌ Erreur envoi email:', error);
+    }
+  };
+
+  const handleQuantityChange = (newQty) => {
+    const qty = Math.max(1, Math.min(10, newQty));
+    setFormData(prev => ({
+      ...prev,
+      quantity: qty,
+      games: Array(qty).fill('').map((_, i) => prev.games[i] || '')
+    }));
+  };
+
+  const handleGameChange = (index, value) => {
+    const newGames = [...formData.games];
+    newGames[index] = value;
+    setFormData(prev => ({ ...prev, games: newGames }));
+  };
+
+  const handleSubmit = async () => {
+    if (formData.games.some(game => !game.trim())) {
+      alert('Veuillez remplir tous les noms de jeux');
+      return;
+    }
+
+    if (!formData.lastName || !formData.firstName || !formData.email || 
+        !formData.phone || !formData.address || !formData.postalCode || !formData.city) {
+      alert('Veuillez remplir tous les champs obligatoires');
+      return;
+    }
+
+    const totalPrice = PRICE_PER_FRAME * formData.quantity;
+    const orderId = `order:${Date.now()}`;
+    
+    const order = {
+      id: orderId,
+      timestamp: Date.now(),
+      status: 'en_attente_paiement',
+      ...formData,
+      totalPrice,
+      pricePerUnit: PRICE_PER_FRAME
+    };
+
+    try {
+      await window.storage.set(orderId, JSON.stringify(order));
+      
+      // Prépare les données pour les emails
+      const emailData = {
+        order_number: orderId.replace('order:', ''),
+        customer_name: `${formData.firstName} ${formData.lastName}`,
+        customer_email: formData.email,
+        customer_phone: formData.phone,
+        customer_address: formData.address,
+        customer_postal: formData.postalCode,
+        customer_city: formData.city,
+        quantity: formData.quantity,
+        total_price: totalPrice.toFixed(2),
+        games_list: formData.games.map((g, i) => `${i + 1}. ${g}`).join('\n'),
+        order_date: new Date().toLocaleString('fr-FR')
+      };
+
+      // Email à l'admin (toi)
+      await sendEmail(
+        EMAILJS_CONFIG.templates.admin, 
+        emailData, 
+        EMAILJS_CONFIG.adminEmail
+      );
+
+      // Email de confirmation au client
+      await sendEmail(
+        EMAILJS_CONFIG.templates.clientConfirm, 
+        emailData, 
+        formData.email
+      );
+      
+      const paypalLink = `https://www.paypal.com/paypalme/${PAYPAL_USERNAME}/${totalPrice}`;
+      
+      alert(`✅ Commande enregistrée !\n\nTotal: ${totalPrice.toFixed(2)}€\n\nVous allez recevoir un email de confirmation.\nVous allez être redirigé vers PayPal pour le paiement.`);
+      
+      // Dans un vrai site : window.location.href = paypalLink;
+      console.log('Redirection PayPal:', paypalLink);
+      
+      setFormData({
+        quantity: 1,
+        games: [''],
+        lastName: '',
+        firstName: '',
+        email: '',
+        phone: '',
+        address: '',
+        postalCode: '',
+        city: ''
+      });
+      
+      loadOrders();
+    } catch (error) {
+      alert('Erreur lors de l\'enregistrement de la commande');
+    }
+  };
+
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const result = await window.storage.get(orderId);
+      if (result) {
+        const order = JSON.parse(result.value);
+        order.status = newStatus;
+        await window.storage.set(orderId, JSON.stringify(order));
+        
+        // Prépare les données email
+        const emailData = {
+          order_number: orderId.replace('order:', ''),
+          customer_name: `${order.firstName} ${order.lastName}`,
+          customer_email: order.email,
+          customer_phone: order.phone,
+          customer_address: order.address,
+          customer_postal: order.postalCode,
+          customer_city: order.city,
+          quantity: order.quantity,
+          total_price: order.totalPrice.toFixed(2),
+          games_list: order.games.map((g, i) => `${i + 1}. ${g}`).join('\n'),
+          order_date: new Date(order.timestamp).toLocaleString('fr-FR')
+        };
+        
+        // Envoie l'email correspondant au nouveau statut
+        if (newStatus === 'paye') {
+          await sendEmail(
+            EMAILJS_CONFIG.templates.clientPaid, 
+            emailData, 
+            order.email
+          );
+          alert(`✅ Commande marquée comme payée.\n📧 Email de confirmation envoyé à ${order.email}`);
+        } else if (newStatus === 'en_production') {
+          await sendEmail(
+            EMAILJS_CONFIG.templates.clientProduction, 
+            emailData, 
+            order.email
+          );
+          alert(`✅ Commande passée en production.\n📧 Email envoyé à ${order.email}`);
+        } else if (newStatus === 'expediee') {
+          await sendEmail(
+            EMAILJS_CONFIG.templates.clientShipped, 
+            emailData, 
+            order.email
+          );
+          alert(`✅ Commande marquée comme expédiée.\n📧 Email d'expédition envoyé à ${order.email}`);
+        }
+        
+        loadOrders();
+      }
+    } catch (error) {
+      alert('Erreur lors de la mise à jour');
+    }
+  };
+
+  const getStatusDisplay = (order) => {
+    const isPaid = order.status === 'paye' || order.status === 'en_production' || order.status === 'expediee';
+    const isInProduction = order.status === 'en_production' || order.status === 'expediee';
+    const isShipped = order.status === 'expediee';
+    
+    return (
+      <div className="flex flex-wrap gap-2">
+        {!isPaid && (
+          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
+            <Clock className="w-4 h-4" />
+            En attente paiement
+          </span>
+        )}
+        {isPaid && (
+          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+            <CheckCircle className="w-4 h-4" />
+            Payé
+          </span>
+        )}
+        {isInProduction && (
+          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+            <Package className="w-4 h-4" />
+            En production
+          </span>
+        )}
+        {isShipped && (
+          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
+            <CheckCircle className="w-4 h-4" />
+            Expédiée
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+      {/* Script EmailJS */}
+      <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+      
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <img 
+                src={LOGO_URL}
+                alt="GameAchieved Logo" 
+                className="w-12 h-12 object-contain"
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                  e.target.nextSibling.style.display = 'flex';
+                }}
+              />
+              <div className="w-12 h-12 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-xl hidden items-center justify-center text-2xl">
+                🏆
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">GameAchieved</h1>
+                <p className="text-sm text-gray-600">Cadres personnalisés</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setView('form')}
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  view === 'form' 
+                    ? 'bg-indigo-600 text-white' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                <ShoppingCart className="w-5 h-5 inline mr-2" />
+                Commander
+              </button>
+              <button
+                onClick={() => setView('admin')}
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  view === 'admin' 
+                    ? 'bg-indigo-600 text-white' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                📊 Tableau de bord
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {view === 'form' ? (
+          <div className="max-w-2xl mx-auto">
+            <div className="bg-white rounded-2xl shadow-lg p-8">
+              <div className="flex items-start gap-6 mb-8">
+                <div className="w-48 h-64 bg-gradient-to-br from-gray-700 to-gray-900 rounded-lg shadow-md flex items-center justify-center border-4 border-gray-400 relative">
+                  <div className="absolute top-4">
+                    <div className="w-12 h-12 bg-gray-300 rounded-full flex items-center justify-center text-2xl">🏆</div>
+                  </div>
+                  <div className="text-center text-gray-300 font-bold">
+                    <div className="text-6xl mb-2">🎮</div>
+                    <div className="text-xs">GAME</div>
+                    <div className="text-sm">ACHIEVED</div>
+                  </div>
+                  <div className="absolute bottom-2 left-2 w-6 h-6 bg-gray-500 rounded flex items-center justify-center text-xs">❤️</div>
+                  <div className="absolute bottom-2 right-2 w-6 h-6 bg-gray-500 rounded flex items-center justify-center text-xs">⚡</div>
+                </div>
+                <div className="flex-1">
+                  <h2 className="text-3xl font-bold text-gray-900 mb-2">Nouvelle commande</h2>
+                  <p className="text-gray-600 mb-4">Cadre GameAchieved personnalisé - {PRICE_PER_FRAME}€/pièce</p>
+                  <p className="text-sm text-gray-500">Dimensions : 15 x 20 cm</p>
+                  <p className="text-sm text-gray-500">Design métallique avec trophée et inscription "GAME ACHIEVED"</p>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Quantité de cadres
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={formData.quantity}
+                    onChange={(e) => handleQuantityChange(parseInt(e.target.value) || 1)}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Nom(s) du/des jeu(x) à personnaliser
+                  </label>
+                  <div className="space-y-3">
+                    {formData.games.map((game, index) => (
+                      <input
+                        key={index}
+                        type="text"
+                        placeholder={`Jeu ${index + 1} (ex: The Legend of Zelda)`}
+                        value={game}
+                        onChange={(e) => handleGameChange(index, e.target.value)}
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition"
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-indigo-50 rounded-lg p-4 border-2 border-indigo-200">
+                  <div className="flex justify-between items-center text-lg font-bold text-indigo-900">
+                    <span>Prix total</span>
+                    <span className="text-2xl">{(PRICE_PER_FRAME * formData.quantity).toFixed(2)}€</span>
+                  </div>
+                </div>
+
+                <div className="border-t-2 border-gray-100 pt-6">
+                  <h3 className="text-xl font-bold text-gray-900 mb-4">Vos informations</h3>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <input
+                      type="text"
+                      placeholder="Nom *"
+                      value={formData.lastName}
+                      onChange={(e) => setFormData(prev => ({ ...prev, lastName: e.target.value }))}
+                      className="px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Prénom *"
+                      value={formData.firstName}
+                      onChange={(e) => setFormData(prev => ({ ...prev, firstName: e.target.value }))}
+                      className="px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition"
+                    />
+                  </div>
+
+                  <input
+                    type="email"
+                    placeholder="Email *"
+                    value={formData.email}
+                    onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition mt-4"
+                  />
+
+                  <input
+                    type="tel"
+                    placeholder="Téléphone *"
+                    value={formData.phone}
+                    onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition mt-4"
+                  />
+
+                  <input
+                    type="text"
+                    placeholder="Adresse *"
+                    value={formData.address}
+                    onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition mt-4"
+                  />
+
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    <input
+                      type="text"
+                      placeholder="Code postal *"
+                      value={formData.postalCode}
+                      onChange={(e) => setFormData(prev => ({ ...prev, postalCode: e.target.value }))}
+                      className="px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Ville *"
+                      value={formData.city}
+                      onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
+                      className="px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none transition"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSubmit}
+                  className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-lg font-bold text-lg hover:from-indigo-700 hover:to-purple-700 transition shadow-lg"
+                >
+                  Passer la commande et payer via PayPal
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="bg-white rounded-2xl shadow-lg p-8">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-3xl font-bold text-gray-900">Commandes reçues</h2>
+                <span className="px-4 py-2 bg-indigo-100 text-indigo-800 rounded-lg font-bold">
+                  {orders.length} commande{orders.length > 1 ? 's' : ''}
+                </span>
+              </div>
+
+              {orders.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <Package className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                  <p className="text-lg">Aucune commande pour le moment</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {orders.map((order) => (
+                    <div key={order.id} className="border-2 border-gray-200 rounded-xl p-6 hover:border-indigo-300 transition">
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="text-xl font-bold text-gray-900">
+                              {order.firstName} {order.lastName}
+                            </h3>
+                            {getStatusDisplay(order)}
+                          </div>
+                          <p className="text-sm text-gray-500">
+                            {new Date(order.timestamp).toLocaleString('fr-FR')}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-bold text-indigo-600">{order.totalPrice.toFixed(2)}€</p>
+                          <p className="text-sm text-gray-500">{order.quantity} cadre{order.quantity > 1 ? 's' : ''}</p>
+                        </div>
+                      </div>
+
+                      <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                        <p className="font-semibold text-gray-700 mb-2">Jeux à personnaliser :</p>
+                        <ul className="list-disc list-inside space-y-1">
+                          {order.games.map((game, idx) => (
+                            <li key={idx} className="text-gray-900">{game}</li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="flex items-start gap-2">
+                          <Mail className="w-4 h-4 text-gray-400 mt-0.5" />
+                          <span className="text-gray-700">{order.email}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <Phone className="w-4 h-4 text-gray-400 mt-0.5" />
+                          <span className="text-gray-700">{order.phone}</span>
+                        </div>
+                        <div className="flex items-start gap-2 col-span-2">
+                          <MapPin className="w-4 h-4 text-gray-400 mt-0.5" />
+                          <span className="text-gray-700">
+                            {order.address}, {order.postalCode} {order.city}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 mt-4 pt-4 border-t border-gray-200">
+                        <button
+                          onClick={() => updateOrderStatus(order.id, 'paye')}
+                          className="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition font-medium text-sm"
+                        >
+                          ✓ Marquer payé
+                        </button>
+                        <button
+                          onClick={() => updateOrderStatus(order.id, 'en_production')}
+                          className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition font-medium text-sm"
+                        >
+                          🔨 En production
+                        </button>
+                        <button
+                          onClick={() => updateOrderStatus(order.id, 'expediee')}
+                          className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition font-medium text-sm"
+                        >
+                          📦 Expédiée
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
